@@ -17,6 +17,7 @@ import logging
 
 import matplotlib as mpl
 import numpy as np
+import cupy as cp
 from matplotlib import pyplot as plt
 from numpy.fft import fftn, fftshift, ifftshift
 from numpy.linalg import lstsq
@@ -26,9 +27,11 @@ from .otf import HanserPSF
 from .utils import fft_pad, psqrt
 from .zernike import noll2degrees, noll2name, zernike
 
+from line_profiler_pycharm import profile
 logger = logging.getLogger(__name__)
 
 
+@profile
 def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, phase_only=False):
     """Retrieve the phase across the objective's back pupil from an experimentally measured PSF.
 
@@ -78,7 +81,7 @@ def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, ph
     # The field magnitude is the square root of the intensity
     mag = psqrt(data)
     # generate a model from parameters
-    model = HanserPSF(**params)
+    model = HanserPSF(**params, gpu=isinstance(data, cp.ndarray))
     # generate coordinates
     model._gen_kr()
     # start a list for iteration
@@ -141,11 +144,15 @@ def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, ph
     )
 
     # shift mask
-    mask = fftshift(mask)
+    mask = cp.asnumpy(fftshift(mask))   # will convert to numpy if needed for unwrap_phase
     # shift phase then unwrap and mask
+    new_pupil = cp.asnumpy(new_pupil)   # will convert to numpy if needed for unwrap_phase
     phase = unwrap_phase(fftshift(np.angle(new_pupil))) * mask
     # shift magnitude
     magnitude = fftshift(abs(new_pupil)) * mask
+    if isinstance(data, cp.ndarray):
+        magnitude = cp.array(magnitude)     # convert numpy back to cupy
+        phase = cp.array(phase)             # convert numpy back to cupy
     return PhaseRetrievalResult(magnitude, phase, mse, pupil_diff, mse_diff, model)
 
 
@@ -379,11 +386,11 @@ def _plot_complex_pupil(mag, phase, axs=None):
         fig = ax_phase.get_figure()
 
     phase_img = ax_phase.matshow(
-        np.ma.array(phase, mask=mag == 0), cmap="coolwarm", vmin=-np.pi, vmax=np.pi
+        np.ma.array(cp.asnumpy(phase), mask=cp.asnumpy(mag) == 0), cmap="coolwarm", vmin=-np.pi, vmax=np.pi
     )
     plt.colorbar(phase_img, ax=ax_phase)
 
-    mag_img = ax_mag.matshow(mag, cmap="inferno", norm=mpl.colors.PowerNorm(0.5))
+    mag_img = ax_mag.matshow(cp.asnumpy(mag), cmap="inferno", norm=mpl.colors.PowerNorm(0.5))
     plt.colorbar(mag_img, ax=ax_mag)
 
     ax_phase.set_title("Pupil Phase")

@@ -16,7 +16,9 @@ Copyright (c) 2016, David Hoffman
 from typing import Tuple
 
 import numpy as np
+import cupy as cp
 from scipy.special import eval_jacobi
+from scipy.special import binom
 
 from .utils import cart2pol
 
@@ -292,8 +294,15 @@ def zernike(r: float, theta: float, n: int, m: int, norm: bool = True) -> float:
         raise ValueError("Radial and Azimuthal degrees have different shapes")
 
     # make sure r and theta are arrays
-    r = np.asarray(r, dtype=float)
-    theta = np.asarray(theta, dtype=float)
+    try:
+        r = np.asarray(r, dtype=float)
+    except:
+        r = cp.asarray(r, dtype=float)
+
+    try:
+        theta = np.asarray(theta, dtype=float)
+    except:
+        theta = cp.asarray(theta, dtype=float)
 
     # make sure that r is always greater than 0
     if not (r >= 0).all():
@@ -309,7 +318,13 @@ def zernike(r: float, theta: float, n: int, m: int, norm: bool = True) -> float:
         raise ValueError("n must always be greater or equal to m")
 
     # return column of zernike polynomials
-    return np.array([_zernike(r, theta, nn, mm, norm) for nn, mm in zip(n, m)]).squeeze()
+    column=[_zernike(r, theta, nn, mm, norm) for nn, mm in zip(n, m)]
+    if isinstance(r, cp.ndarray):
+        column = cp.array(column).squeeze()
+    else:
+        column = np.array(column).squeeze()
+
+    return column
 
 
 def _radial_zernike(r, n, m):
@@ -325,12 +340,17 @@ def _radial_zernike(r, n, m):
         return rad_zern
     rprime = r[valid_points]
     # for the radial part m is always positive
-    m = abs(m)
-    # calculate the coefs
-    coef1 = (n + m) // 2
-    coef2 = (n - m) // 2
-    jacobi = eval_jacobi(coef2, m, 0, 1 - 2 * rprime**2)
-    rad_zern[valid_points] = (-1) ** coef2 * rprime**m * jacobi
+    m0 = abs(m)
+    for k in range((n - m0) // 2 + 1):
+        rad_zern[valid_points] += (-1.) ** k * binom(n - k, k) * binom(n - 2 * k, (n - m0) // 2 - k) * rprime ** (n - 2 * k)
+
+    rad_zern[valid_points] *= (rprime <= 1.)
+
+    # # calculate the coefs
+    # coef1 = (n + m) // 2
+    # coef2 = (n - m) // 2
+    # jacobi = eval_jacobi(coef2, m, 0, 1 - 2 * rprime**2)
+    # rad_zern[valid_points] = (-1) ** coef2 * rprime**m * jacobi
     return rad_zern
 
 

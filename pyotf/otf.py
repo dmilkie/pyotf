@@ -17,6 +17,7 @@ import logging
 from functools import cached_property
 
 import numpy as np
+import cupy as cp
 from numpy.fft import fftfreq, fftshift, ifftn
 from numpy.linalg import norm
 
@@ -51,7 +52,7 @@ class BasePSF(object):
     zsize = NumericProperty(attr="_zsize", vartype=int, doc="z size")
 
     def __init__(
-        self, wl, na, ni, res, size, zres=None, zsize=None, vec_corr="none", condition="sine"
+        self, wl, na, ni, res, size, zres=None, zsize=None, vec_corr="none", condition="sine", gpu=False
     ):
         """Generate a PSF object.
 
@@ -102,6 +103,7 @@ class BasePSF(object):
         self.zsize = zsize
         self.vec_corr = vec_corr
         self.condition = condition
+        self.gpu = gpu
 
     def __repr__(self):
         """Return representation of PSF object."""
@@ -325,7 +327,11 @@ class HanserPSF(BasePSF):
 
     @zrange.setter
     def zrange(self, value):
-        self._zrange = np.asarray(value)
+        if self.gpu:
+            self._zrange = cp.asarray(value)
+        else:
+            self._zrange = np.asarray(value)
+
         # check if passed value is scalar
         if not self._zrange.shape:
             # convert to array for later multiplications
@@ -334,7 +340,10 @@ class HanserPSF(BasePSF):
 
     def _gen_kr(self):
         """Generate coordinate system and other internal parameters."""
-        k = self._k = fftfreq(self.size, self.res)
+        if self.gpu:
+            k = self._k = cp.fft.fftfreq(self.size, self.res)
+        else:
+            k = self._k = fftfreq(self.size, self.res)
         kxx, kyy = np.meshgrid(k, k)
         self._kr, self._phi = cart2pol(kyy, kxx)
         # kmag is the radius of the spherical shell of the OTF
