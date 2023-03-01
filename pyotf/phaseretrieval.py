@@ -27,11 +27,11 @@ from .otf import HanserPSF
 from .utils import fft_pad, psqrt
 from .zernike import noll2degrees, noll2name, zernike
 
-from line_profiler_pycharm import profile
+
 logger = logging.getLogger(__name__)
 
 
-@profile
+
 def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, phase_only=False):
     """Retrieve the phase across the objective's back pupil from an experimentally measured PSF.
 
