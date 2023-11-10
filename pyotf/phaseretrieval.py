@@ -64,7 +64,7 @@ class PhaseRetrievalResult(object):
         self.model = model
         # calculate coordinate system
         model._gen_kr()
-        kxx, kyy = model._kxx, model._kyy
+        kxx, kyy = model.kxx, model.kyy
         r, theta = model._kr, model._phi
         self.r, self.theta = fftshift(r), fftshift(theta)
         self.kxx, self.kyy = fftshift(kxx), fftshift(kyy)
