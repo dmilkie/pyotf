@@ -17,7 +17,11 @@ import logging
 from functools import cached_property
 
 import numpy as np
-import cupy as cp
+try:
+    import cupy as cp
+except ImportError as e:
+    logging.warning(f"Cupy not supported on your system: {e}")
+
 from numpy.fft import fftfreq, fftshift, ifftn
 from numpy.linalg import norm
 
@@ -441,7 +445,10 @@ class HanserPSF(BasePSF):
     def apply_pupil(self, pupil):
         """Apply a pupil function to the model."""
         self._attribute_changed()
-        self.PSFa = self._gen_psf(pupil)
+        if self.gpu:
+            self.PSFa = self._gen_psf(cp.array(pupil))
+        else:
+            self.PSFa = self._gen_psf(pupil)
 
     @cached_property
     def OTFa(self):
