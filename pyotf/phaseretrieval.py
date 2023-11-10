@@ -17,7 +17,10 @@ import logging
 
 import matplotlib as mpl
 import numpy as np
-import cupy as cp
+try:
+    import cupy as cp
+except ImportError as e:
+    logging.warning(f"Cupy not supported on your system: {e}")
 from matplotlib import pyplot as plt
 from numpy.fft import fftn, fftshift, ifftshift
 from numpy.linalg import lstsq
