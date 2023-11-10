@@ -345,6 +345,8 @@ class HanserPSF(BasePSF):
         else:
             k = self._k = fftfreq(self.size, self.res)
         kxx, kyy = np.meshgrid(k, k)
+        self._kxx = kxx
+        self._kyy = kyy
         self._kr, self._phi = cart2pol(kyy, kxx)
         # kmag is the radius of the spherical shell of the OTF
         self._kmag = self.ni / self.wl

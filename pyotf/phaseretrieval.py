@@ -31,8 +31,133 @@ from .zernike import noll2degrees, noll2name, zernike
 logger = logging.getLogger(__name__)
 
 
+class PhaseRetrievalResult(object):
+    """An object for holding the result of phase retrieval."""
 
-def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, phase_only=False):
+    def __init__(self, mag, phase, mse, pupil_diff, mse_diff, model):
+        """Pupil function's phase and magnitude.
+
+        Paramters
+        ---------
+        mag : ndarray (n, n)
+            Coefficients for the zernike decomposition of the magnitude
+        phase : ndarray (n, n)
+            Coefficients for the zernike decomposition of the phase
+        mse : ndarray (m, )
+            Mean squared error as a function of the number of iterations (m)
+            performed
+        pupil_diff : ndarray (m, )
+            The relative change in the retrieved pupil function as a function
+            of the number of iterations (m) performed
+        mse_diff : ndarray (m, )
+            The relative change in the mean squared error as a function of the
+            number of iterations (m) performed
+        model : HanserPSF object
+            the model used to retrieve the pupil function
+        """
+        # update internals
+        self.mag = mag
+        self.phase = phase
+        self.mse = mse
+        self.pupil_diff = pupil_diff
+        self.mse_diff = mse_diff
+        self.model = model
+        # calculate coordinate system
+        model._gen_kr()
+        kxx, kyy = model._kxx, model._kyy
+        r, theta = model._kr, model._phi
+        self.r, self.theta = fftshift(r), fftshift(theta)
+        self.kxx, self.kyy = fftshift(kxx), fftshift(kyy)
+        # pull specific model parameters
+        self.na, self.wl = model.na, model.wl
+
+    @property
+    def rms_error(self):
+        """RMS wavefront error."""
+        return np.sqrt((self.phase[self.r <= self.na / self.wl] ** 2).mean())
+
+    @property
+    def pv_error(self):
+        """PV wavefront error."""
+        wavefront_flat = self.phase[self.r <= self.na / self.wl]
+        return wavefront_flat.max() - wavefront_flat.min()
+
+    def fit_to_zernikes(self, num_zerns, *, mapping=noll2degrees):
+        """Fits the data to a number of zernikes."""
+        # normalize r so that 1 = diffraction limit
+        r, theta = self.r, self.theta
+        r = r / (self.na / self.wl)
+        # generate zernikes
+        zerns = zernike(r, theta, *mapping(np.arange(1, num_zerns + 1)))
+        mag_coefs = _fit_to_zerns(self.mag, zerns, r)
+        phase_coefs = _fit_to_zerns(self.phase, zerns, r)
+        self.zd_result = ZernikeDecomposition(mag_coefs, phase_coefs, zerns)
+        return self.zd_result
+
+    def _generate_psf(self, complex_pupil, size=None, zsize=None, zrange=None):
+        """Make a perfect PSF."""
+        # make a copy of the internal model
+        model = copy.copy(self.model)
+        # update zsize or zrange
+        if zsize is not None:
+            model.zsize = zsize
+        if zrange is not None:
+            model.zrange = zrange
+        # generate the PSF from the reconstructed phase
+        model.apply_pupil(ifftshift(complex_pupil))
+        # reshpae PSF if needed in x/y dimensions
+        psf = model.PSFi
+        nz, ny, nx = psf.shape
+        assert ny == nx, "Something is very wrong"
+        if size is not None:
+            if nx < size:
+                # if size is too small, pad it out.
+                psf = fft_pad(psf, (nz, size, size), mode="constant")
+            elif nx > size:
+                # if size is too big, crop it
+                lb = size // 2
+                hb = size - lb
+                myslice = slice(nx // 2 - lb, nx // 2 + hb)
+                psf = psf[:, myslice, myslice]
+        # return data
+        return psf
+
+    def generate_zd_psf(self, sphase=slice(4, None, None), size=None, zsize=None, zrange=None):
+        """Generate a PSF from the zernike decomposition (if available)."""
+        return self._generate_psf(self.zd_result.complex_pupil(sphase=sphase), size, zsize, zrange)
+
+    def generate_psf(self, size=None, zsize=None, zrange=None):
+        """Generate a PSF from the retrieved phase."""
+        return self._generate_psf(self.complex_pupil, size, zsize, zrange)
+
+    def plot(self, axs=None):
+        """Plot the retrieved results."""
+        return _plot_complex_pupil(self.mag, self.phase, axs)
+
+    def plot_convergence(self):
+        """Diagnostic plots of the convergence criteria."""
+        with np.errstate(invalid="ignore"):
+            fig, axs = plt.subplots(3, 1, figsize=(6, 6), sharex=True)
+
+            for ax, data in zip(axs, (self.mse, self.mse_diff, self.pupil_diff)):
+                ax.semilogy(data)
+
+            for ax, t in zip(
+                axs, ("Mean Squared Error", "Relative Change in MSE", "Relative Change in Pupil")
+            ):
+                ax.set_title(t)
+
+            fig.tight_layout()
+
+        return fig, axs
+
+    @property
+    def complex_pupil(self):
+        """Return the complex pupil function."""
+        return self.mag * np.exp(1j * self.phase)
+
+
+def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, phase_only=False) -> PhaseRetrievalResult:
     """Retrieve the phase across the objective's back pupil from an experimentally measured PSF.
 
     NOTE: If all that is needed is phase, e.g. for adaptive optical correction, then most normal
@@ -155,129 +280,6 @@ def retrieve_phase(data, params, max_iters=200, pupil_tol=1e-8, mse_tol=1e-8, ph
         phase = cp.array(phase)             # convert numpy back to cupy
     return PhaseRetrievalResult(magnitude, phase, mse, pupil_diff, mse_diff, model)
 
-
-class PhaseRetrievalResult(object):
-    """An object for holding the result of phase retrieval."""
-
-    def __init__(self, mag, phase, mse, pupil_diff, mse_diff, model):
-        """Pupil function's phase and magnitude.
-
-        Paramters
-        ---------
-        mag : ndarray (n, n)
-            Coefficients for the zernike decomposition of the magnitude
-        phase : ndarray (n, n)
-            Coefficients for the zernike decomposition of the phase
-        mse : ndarray (m, )
-            Mean squared error as a function of the number of iterations (m)
-            performed
-        pupil_diff : ndarray (m, )
-            The relative change in the retrieved pupil function as a function
-            of the number of iterations (m) performed
-        mse_diff : ndarray (m, )
-            The relative change in the mean squared error as a function of the
-            number of iterations (m) performed
-        model : HanserPSF object
-            the model used to retrieve the pupil function
-        """
-        # update internals
-        self.mag = mag
-        self.phase = phase
-        self.mse = mse
-        self.pupil_diff = pupil_diff
-        self.mse_diff = mse_diff
-        self.model = model
-        # calculate coordinate system
-        model._gen_kr()
-        r, theta = model._kr, model._phi
-        self.r, self.theta = fftshift(r), fftshift(theta)
-        # pull specific model parameters
-        self.na, self.wl = model.na, model.wl
-
-    @property
-    def rms_error(self):
-        """RMS wavefront error."""
-        return np.sqrt((self.phase[self.r <= self.na / self.wl] ** 2).mean())
-
-    @property
-    def pv_error(self):
-        """PV wavefront error."""
-        wavefront_flat = self.phase[self.r <= self.na / self.wl]
-        return wavefront_flat.max() - wavefront_flat.min()
-
-    def fit_to_zernikes(self, num_zerns, *, mapping=noll2degrees):
-        """Fits the data to a number of zernikes."""
-        # normalize r so that 1 = diffraction limit
-        r, theta = self.r, self.theta
-        r = r / (self.na / self.wl)
-        # generate zernikes
-        zerns = zernike(r, theta, *mapping(np.arange(1, num_zerns + 1)))
-        mag_coefs = _fit_to_zerns(self.mag, zerns, r)
-        phase_coefs = _fit_to_zerns(self.phase, zerns, r)
-        self.zd_result = ZernikeDecomposition(mag_coefs, phase_coefs, zerns)
-        return self.zd_result
-
-    def _generate_psf(self, complex_pupil, size=None, zsize=None, zrange=None):
-        """Make a perfect PSF."""
-        # make a copy of the internal model
-        model = copy.copy(self.model)
-        # update zsize or zrange
-        if zsize is not None:
-            model.zsize = zsize
-        if zrange is not None:
-            model.zrange = zrange
-        # generate the PSF from the reconstructed phase
-        model.apply_pupil(ifftshift(complex_pupil))
-        # reshpae PSF if needed in x/y dimensions
-        psf = model.PSFi
-        nz, ny, nx = psf.shape
-        assert ny == nx, "Something is very wrong"
-        if size is not None:
-            if nx < size:
-                # if size is too small, pad it out.
-                psf = fft_pad(psf, (nz, size, size), mode="constant")
-            elif nx > size:
-                # if size is too big, crop it
-                lb = size // 2
-                hb = size - lb
-                myslice = slice(nx // 2 - lb, nx // 2 + hb)
-                psf = psf[:, myslice, myslice]
-        # return data
-        return psf
-
-    def generate_zd_psf(self, sphase=slice(4, None, None), size=None, zsize=None, zrange=None):
-        """Generate a PSF from the zernike decomposition (if available)."""
-        return self._generate_psf(self.zd_result.complex_pupil(sphase=sphase), size, zsize, zrange)
-
-    def generate_psf(self, size=None, zsize=None, zrange=None):
-        """Generate a PSF from the retrieved phase."""
-        return self._generate_psf(self.complex_pupil, size, zsize, zrange)
-
-    def plot(self, axs=None):
-        """Plot the retrieved results."""
-        return _plot_complex_pupil(self.mag, self.phase, axs)
-
-    def plot_convergence(self):
-        """Diagnostic plots of the convergence criteria."""
-        with np.errstate(invalid="ignore"):
-            fig, axs = plt.subplots(3, 1, figsize=(6, 6), sharex=True)
-
-            for ax, data in zip(axs, (self.mse, self.mse_diff, self.pupil_diff)):
-                ax.semilogy(data)
-
-            for ax, t in zip(
-                axs, ("Mean Squared Error", "Relative Change in MSE", "Relative Change in Pupil")
-            ):
-                ax.set_title(t)
-
-            fig.tight_layout()
-
-        return fig, axs
-
-    @property
-    def complex_pupil(self):
-        """Return the complex pupil function."""
-        return self.mag * np.exp(1j * self.phase)
 
 
 class ZernikeDecomposition(object):
