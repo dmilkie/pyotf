@@ -25,6 +25,7 @@ except ImportError as e:
 from numpy.fft import fftfreq, fftshift, ifftn
 from numpy.linalg import norm
 
+from line_profiler_pycharm import profile
 from .display import otf_plot, psf_plot
 from .utils import NumericProperty, cart2pol, easy_fft, easy_ifft, psqrt, slice_maker
 from .zernike import name2noll, noll2degrees, zernike
@@ -291,6 +292,8 @@ class HanserPSF(BasePSF):
             self._gen_zrange()
         else:
             self.zrange = zrange
+        self._gen_kr()
+        self.defocus = self._calc_defocus()
 
     # include parent documentation
     __init__.__doc__ = BasePSF.__init__.__doc__ + __init__.__doc__
@@ -369,12 +372,14 @@ class HanserPSF(BasePSF):
         # objective make sure data is complex
         return (kr <= diff_limit).astype(complex)
 
+    @profile
     def _calc_defocus(self):
         """Calculate the defocus to apply to the base pupil."""
         kz = self._kz
         return np.exp(2 * np.pi * 1j * kz * self.zrange[:, np.newaxis, np.newaxis])
 
-    def _gen_psf(self, pupil_base=None):
+    @profile
+    def gen_psf(self, pupil_base=None):
         """Generate the PSF.
 
         kwargs
@@ -401,11 +406,11 @@ class HanserPSF(BasePSF):
         phi = self._phi
         kmag = self._kmag
         # apply the defocus to the base_pupil
-        pupil = pupil_base * self._calc_defocus()
+        pupil = pupil_base * self.defocus
         # calculate theta, this is possible because we know that the
         # OTF is only non-zero on a spherical shell
         theta = np.arcsin((kr < kmag) * kr / kmag)
-        # The authors claim that the following code is unecessary as the
+        # The authors claim that the following code is unnecessary as the
         # sine condition is already taken into account in the definition
         # of the pupil, but I call bullshit
         if self.condition != "none":
@@ -446,9 +451,9 @@ class HanserPSF(BasePSF):
         """Apply a pupil function to the model."""
         self._attribute_changed()
         if self.gpu:
-            self.PSFa = self._gen_psf(cp.array(pupil))
+            self.PSFa = self.gen_psf(cp.array(pupil))
         else:
-            self.PSFa = self._gen_psf(pupil)
+            self.PSFa = self.gen_psf(pupil)
 
     @cached_property
     def OTFa(self):
@@ -458,7 +463,7 @@ class HanserPSF(BasePSF):
     @cached_property
     def PSFa(self):
         """Amplitude PSF."""
-        return self._gen_psf()
+        return self.gen_psf()
 
 
 class SheppardPSF(BasePSF):
