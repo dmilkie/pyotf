@@ -16,7 +16,12 @@ Copyright (c) 2016, David Hoffman
 from typing import Tuple
 
 import numpy as np
-import cupy as cp
+import logging
+try:
+    import cupy as cp
+except ImportError as e:
+    logging.warning(f"Cupy not supported on your system: {e}")
+
 from scipy.special import eval_jacobi
 from scipy.special import binom
 
@@ -319,10 +324,7 @@ def zernike(r: float, theta: float, n: int, m: int, norm: bool = True) -> float:
 
     # return column of zernike polynomials
     column=[_zernike(r, theta, nn, mm, norm) for nn, mm in zip(n, m)]
-    if isinstance(r, cp.ndarray):
-        column = cp.array(column).squeeze()
-    else:
-        column = np.array(column).squeeze()
+    column = np.array(column).squeeze()
 
     return column
 
