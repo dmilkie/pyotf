@@ -323,8 +323,11 @@ def zernike(r: float, theta: float, n: int, m: int, norm: bool = True) -> float:
         raise ValueError("n must always be greater or equal to m")
 
     # return column of zernike polynomials
-    column=[_zernike(r, theta, nn, mm, norm) for nn, mm in zip(n, m)]
-    column = np.array(column).squeeze()
+    column = [_zernike(r, theta, nn, mm, norm) for nn, mm in zip(n, m)]
+    try:
+        column = np.array(column).squeeze()
+    except:
+        column = cp.array(column).squeeze()
 
     return column
 
